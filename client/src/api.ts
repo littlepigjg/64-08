@@ -7,6 +7,9 @@ import type {
   HealthInfo,
   RegistryType,
   PackageSource,
+  VerificationConfig,
+  VerificationResult,
+  PackageVerificationResponse,
 } from './types';
 
 const API_BASE = '/api';
@@ -89,4 +92,35 @@ export const api = {
     request<{ success: boolean; timestamp: number }>('/cache/snapshot', {
       method: 'POST',
     }),
+
+  getSignatureConfig: () =>
+    request<VerificationConfig>('/signature/config'),
+
+  updateSignatureConfig: (config: Partial<VerificationConfig>) =>
+    request<{ success: boolean; config: VerificationConfig }>('/signature/config', {
+      method: 'PUT',
+      body: JSON.stringify(config),
+    }),
+
+  getPackageVerification: (registry: RegistryType, name: string) =>
+    request<PackageVerificationResponse>(
+      `/signature/${registry}/${encodeURIComponent(name)}`
+    ),
+
+  verifyPackage: (registry: RegistryType, name: string, version?: string) => {
+    const qs = version ? `?version=${encodeURIComponent(version)}` : '';
+    return request<{ success: boolean; results: VerificationResult[] }>(
+      `/signature/verify/${registry}/${encodeURIComponent(name)}${qs}`,
+      { method: 'POST' }
+    );
+  },
+
+  verifyAllPackages: () =>
+    request<{
+      success: boolean;
+      total: number;
+      verified: number;
+      failed: number;
+      errors: string[];
+    }>('/signature/verify-all', { method: 'POST' }),
 };

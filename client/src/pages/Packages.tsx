@@ -14,12 +14,45 @@ import {
   Loader2,
   ArrowUpDown,
   TrendingUp,
+  CheckCircle2,
+  AlertTriangle,
+  Clock,
+  HelpCircle,
 } from 'lucide-react';
 import { api } from '../api';
 import type { PackageInfo, RegistryType, PackageSource } from '../types';
 import { formatSize, formatRelativeTime } from '../utils';
 
 type SortBy = 'name' | 'updatedAt' | 'size' | 'downloads';
+
+function VerificationBadge({ status }: { status?: string }) {
+  switch (status) {
+    case 'verified':
+      return (
+        <span className="inline-flex items-center gap-1 text-emerald-600" title="签名验证通过">
+          <CheckCircle2 size={16} />
+        </span>
+      );
+    case 'failed':
+      return (
+        <span className="inline-flex items-center gap-1 text-red-600" title="签名验证失败，包可能被篡改">
+          <AlertTriangle size={16} />
+        </span>
+      );
+    case 'pending':
+      return (
+        <span className="inline-flex items-center gap-1 text-amber-600" title="等待验证">
+          <Clock size={16} />
+        </span>
+      );
+    default:
+      return (
+        <span className="inline-flex items-center gap-1 text-slate-400" title="未验证">
+          <HelpCircle size={16} />
+        </span>
+      );
+  }
+}
 
 export default function Packages() {
   const navigate = useNavigate();
@@ -155,6 +188,7 @@ export default function Packages() {
             <thead>
               <tr>
                 <th className="w-10"></th>
+                <th className="w-12">验证</th>
                 <th className="cursor-pointer select-none" onClick={() => handleSort('name')}>
                   <span className="flex items-center gap-1">
                     包名 <ArrowUpDown size={12} />
@@ -184,7 +218,7 @@ export default function Packages() {
             <tbody>
               {loading && (
                 <tr>
-                  <td colSpan={9} className="py-12 text-center">
+                  <td colSpan={10} className="py-12 text-center">
                     <Loader2 className="animate-spin text-indigo-600 mx-auto" size={24} />
                   </td>
                 </tr>
@@ -192,7 +226,7 @@ export default function Packages() {
 
               {!loading && packages.length === 0 && (
                 <tr>
-                  <td colSpan={9} className="py-16 text-center">
+                  <td colSpan={10} className="py-16 text-center">
                     <Box size={48} className="mx-auto text-slate-300 mb-3" />
                     <p className="text-slate-500">暂无符合条件的包</p>
                     <p className="text-sm text-slate-400 mt-1">
@@ -217,6 +251,9 @@ export default function Packages() {
                       >
                         {pkg.registry === 'npm' ? <Archive size={16} /> : <Database size={16} />}
                       </div>
+                    </td>
+                    <td>
+                      <VerificationBadge status={pkg.verificationStatus} />
                     </td>
                     <td>
                       <div className="font-medium text-slate-800">{pkg.name}</div>

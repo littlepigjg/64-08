@@ -2,6 +2,8 @@ export type RegistryType = 'npm' | 'pypi';
 
 export type PackageSource = 'cache' | 'private' | 'upstream';
 
+export type VerificationStatus = 'verified' | 'failed' | 'pending' | 'unverified';
+
 export interface PackageInfo {
   name: string;
   registry: RegistryType;
@@ -16,6 +18,7 @@ export interface PackageInfo {
   updatedAt: number;
   totalSize: number;
   downloadCount: number;
+  verificationStatus?: VerificationStatus;
 }
 
 export interface PackageVersion {
@@ -25,6 +28,33 @@ export interface PackageVersion {
   sha1?: string;
   publishedAt: number;
   downloadCount: number;
+  integrity?: PackageIntegrity;
+}
+
+export interface PackageIntegrity {
+  algorithm: 'sha1' | 'sha256' | 'sha512';
+  expectedHash: string;
+  computedHash: string;
+  verified: boolean;
+  verifiedAt?: number;
+  signature?: string;
+}
+
+export interface VerificationConfig {
+  enabled: boolean;
+  enforce: boolean;
+  algorithms: Array<'sha1' | 'sha256' | 'sha512'>;
+  verifyOnDownload: boolean;
+  verifyOnAccess: boolean;
+  allowUnverified: boolean;
+}
+
+export interface VerificationResult {
+  packageName: string;
+  version: string;
+  status: VerificationStatus;
+  integrity?: PackageIntegrity;
+  error?: string;
 }
 
 export interface CacheStats {
@@ -37,6 +67,9 @@ export interface CacheStats {
   cachePackages: number;
   maxSize: number;
   usagePercent: number;
+  verifiedPackages: number;
+  failedPackages: number;
+  unverifiedPackages: number;
 }
 
 export interface StorageTrend {

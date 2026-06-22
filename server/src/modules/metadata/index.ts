@@ -2,7 +2,17 @@ import fs from 'fs';
 import path from 'path';
 import { ensureDir, formatDate, getDirSize } from '../../utils';
 import { config } from '../../config';
-import type { PackageInfo, PackageVersion, CacheStats, StorageTrend, CachePolicy, RegistryType, PackageSource } from '../../types';
+import type {
+  PackageInfo,
+  PackageVersion,
+  CacheStats,
+  StorageTrend,
+  CachePolicy,
+  RegistryType,
+  PackageSource,
+  PackageIntegrity,
+  VerificationStatus,
+} from '../../types';
 
 interface DBPackage {
   id: number;
@@ -29,6 +39,7 @@ interface DBVersion {
   sha1?: string;
   publishedAt: number;
   downloadCount: number;
+  integrity?: PackageIntegrity;
 }
 
 interface DB {
@@ -184,6 +195,55 @@ export class MetadataIndex {
     this.scheduleSave();
   }
 
+  updateVersionIntegrity(
+    packageName: string,
+    registry: RegistryType,
+    version: string,
+    integrity: PackageIntegrity
+  ): boolean {
+    const pkg = this.db.packages.find(
+      (p) => p.name === packageName && p.registry === registry
+    );
+    if (!pkg) return false;
+
+    const ver = this.db.versions.find(
+      (v) => v.packageId === pkg.id && v.version === version
+    );
+    if (!ver) return false;
+
+    ver.integrity = integrity;
+    this.scheduleSave();
+    return true;
+  }
+
+  getVerificationStatus(
+    packageName: string,
+    registry: RegistryType
+  ): VerificationStatus {
+    const pkg = this.db.packages.find(
+      (p) => p.name === packageName && p.registry === registry
+    );
+    if (!pkg) return 'unverified';
+
+    const versions = this.db.versions.filter((v) => v.packageId === pkg.id);
+    if (versions.length === 0) return 'unverified';
+
+    const hasFailed = versions.some(
+      (v) => v.integrity && v.integrity.verified === false
+    );
+    if (hasFailed) return 'failed';
+
+    const allVerified = versions.every(
+      (v) => v.integrity && v.integrity.verified === true
+    );
+    if (allVerified) return 'verified';
+
+    const hasPending = versions.some((v) => !v.integrity);
+    if (hasPending) return 'pending';
+
+    return 'unverified';
+  }
+
   private recalcPackageSize(packageId: number): void {
     const pkgVersions = this.db.versions.filter((v) => v.packageId === packageId);
     const total = pkgVersions.reduce((s, v) => s + v.size, 0);
@@ -222,6 +282,7 @@ export class MetadataIndex {
         sha1: v.sha1,
         publishedAt: v.publishedAt,
         downloadCount: v.downloadCount,
+        integrity: v.integrity,
       }));
 
     return {
@@ -238,6 +299,7 @@ export class MetadataIndex {
       totalSize: pkg.totalSize,
       downloadCount: pkg.downloadCount,
       versions,
+      verificationStatus: this.getVerificationStatus(name, registry),
     };
   }
 
@@ -309,7 +371,9 @@ export class MetadataIndex {
         sha1: v.sha1,
         publishedAt: v.publishedAt,
         downloadCount: v.downloadCount,
+        integrity: v.integrity,
       })),
+      verificationStatus: this.getVerificationStatus(pkg.name, pkg.registry),
     }));
 
     return { packages, total };
@@ -363,6 +427,21 @@ export class MetadataIndex {
     const privatePackages = this.db.packages.filter((p) => p.source === 'private').length;
     const cachePackages = this.db.packages.filter((p) => p.source === 'cache').length;
 
+    let verifiedPackages = 0;
+    let failedPackages = 0;
+    let unverifiedPackages = 0;
+
+    for (const pkg of this.db.packages) {
+      const status = this.getVerificationStatus(pkg.name, pkg.registry);
+      if (status === 'verified') {
+        verifiedPackages++;
+      } else if (status === 'failed') {
+        failedPackages++;
+      } else {
+        unverifiedPackages++;
+      }
+    }
+
     const policy = this.getCachePolicy();
     const maxSizeBytes = policy.maxSizeGB * 1024 * 1024 * 1024;
     const dirSize = getDirSize(config.storageDir);
@@ -378,6 +457,9 @@ export class MetadataIndex {
       cachePackages,
       maxSize: maxSizeBytes,
       usagePercent: actualSize > 0 && maxSizeBytes > 0 ? Math.min(100, (actualSize / maxSizeBytes) * 100) : 0,
+      verifiedPackages,
+      failedPackages,
+      unverifiedPackages,
     };
   }
 

@@ -11,10 +11,48 @@ import {
   FileText,
   Loader2,
   AlertTriangle,
+  CheckCircle2,
+  Clock,
+  HelpCircle,
+  Shield,
+  RefreshCw,
 } from 'lucide-react';
 import { api } from '../api';
-import type { PackageInfo, RegistryType } from '../types';
+import type { PackageInfo, RegistryType, VerificationStatus } from '../types';
 import { formatSize, formatDate, formatRelativeTime } from '../utils';
+
+function VerificationBadge({ status, size = 16 }: { status?: VerificationStatus; size?: number }) {
+  switch (status) {
+    case 'verified':
+      return (
+        <span className="inline-flex items-center gap-1.5 text-emerald-600" title="签名验证通过">
+          <CheckCircle2 size={size} />
+          <span className="text-sm font-medium">验证通过</span>
+        </span>
+      );
+    case 'failed':
+      return (
+        <span className="inline-flex items-center gap-1.5 text-red-600" title="签名验证失败，包可能被篡改">
+          <AlertTriangle size={size} />
+          <span className="text-sm font-medium">验证失败</span>
+        </span>
+      );
+    case 'pending':
+      return (
+        <span className="inline-flex items-center gap-1.5 text-amber-600" title="等待验证">
+          <Clock size={size} />
+          <span className="text-sm font-medium">待验证</span>
+        </span>
+      );
+    default:
+      return (
+        <span className="inline-flex items-center gap-1.5 text-slate-400" title="未验证">
+          <HelpCircle size={size} />
+          <span className="text-sm font-medium">未验证</span>
+        </span>
+      );
+  }
+}
 
 export default function PackageDetail() {
   const params = useParams<{ registry: RegistryType; name: string }>();
@@ -22,6 +60,7 @@ export default function PackageDetail() {
   const [pkg, setPkg] = useState<PackageInfo | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
+  const [verifying, setVerifying] = useState(false);
 
   const loadPkg = async () => {
     setLoading(true);
@@ -56,6 +95,17 @@ export default function PackageDetail() {
     if (!confirm('仅保留最新 3 个版本，删除其余旧版本？')) return;
     await api.cleanupUnused(params.registry!, decodeURIComponent(params.name!), 3);
     loadPkg();
+  };
+
+  const handleVerify = async () => {
+    if (!pkg) return;
+    setVerifying(true);
+    try {
+      await api.verifyPackage(params.registry!, decodeURIComponent(params.name!));
+      loadPkg();
+    } finally {
+      setVerifying(false);
+    }
   };
 
   if (loading) {
@@ -116,6 +166,7 @@ export default function PackageDetail() {
                 ) : (
                   <span className="badge bg-emerald-100 text-emerald-700">💾 代理缓存</span>
                 )}
+                <VerificationBadge status={pkg.verificationStatus} size={18} />
               </div>
               {pkg.scope && (
                 <p className="text-sm text-slate-500 mt-1">
@@ -129,6 +180,14 @@ export default function PackageDetail() {
           </div>
 
           <div className="flex gap-2">
+            <button className="btn btn-secondary" onClick={handleVerify} disabled={verifying}>
+              {verifying ? (
+                <Loader2 size={16} className="animate-spin" />
+              ) : (
+                <Shield size={16} />
+              )}
+              {verifying ? '验证中...' : '验证签名'}
+            </button>
             {pkg.versions.length > 3 && (
               <button className="btn btn-secondary" onClick={handleCleanupOld}>
                 清理旧版本
@@ -176,39 +235,90 @@ export default function PackageDetail() {
           {pkg.versions.map((ver) => (
             <div
               key={ver.version}
-              className="flex items-center justify-between p-4 rounded-lg border border-slate-200 hover:bg-slate-50 transition-colors"
+              className="p-4 rounded-lg border border-slate-200 hover:bg-slate-50 transition-colors"
             >
-              <div className="flex items-center gap-4">
-                <div className="w-10 h-10 rounded-lg bg-indigo-50 text-indigo-600 flex items-center justify-center font-mono font-bold text-sm">
-                  v{ver.version.split('.')[0]}
-                </div>
-                <div>
-                  <div className="flex items-center gap-3">
-                    <span className="font-mono font-semibold text-slate-800">{ver.version}</span>
-                    {ver.version === pkg.latestVersion && (
-                      <span className="badge bg-emerald-100 text-emerald-700">最新</span>
-                    )}
+              <div className="flex items-center justify-between">
+                <div className="flex items-center gap-4">
+                  <div className="w-10 h-10 rounded-lg bg-indigo-50 text-indigo-600 flex items-center justify-center font-mono font-bold text-sm">
+                    v{ver.version.split('.')[0]}
                   </div>
-                  <div className="flex items-center gap-4 mt-1 text-xs text-slate-500">
-                    <span className="inline-flex items-center gap-1">
-                      <Calendar size={12} /> {formatDate(ver.publishedAt)}
-                    </span>
-                    <span className="inline-flex items-center gap-1">
-                      <Database size={12} /> {formatSize(ver.size)}
-                    </span>
-                    <span className="inline-flex items-center gap-1">
-                      <Download size={12} /> {ver.downloadCount} 次
-                    </span>
+                  <div>
+                    <div className="flex items-center gap-3">
+                      <span className="font-mono font-semibold text-slate-800">{ver.version}</span>
+                      {ver.version === pkg.latestVersion && (
+                        <span className="badge bg-emerald-100 text-emerald-700">最新</span>
+                      )}
+                      <VerificationBadge
+                        status={
+                          ver.integrity
+                            ? ver.integrity.verified
+                              ? 'verified'
+                              : 'failed'
+                            : 'unverified'
+                        }
+                        size={14}
+                      />
+                    </div>
+                    <div className="flex items-center gap-4 mt-1 text-xs text-slate-500">
+                      <span className="inline-flex items-center gap-1">
+                        <Calendar size={12} /> {formatDate(ver.publishedAt)}
+                      </span>
+                      <span className="inline-flex items-center gap-1">
+                        <Database size={12} /> {formatSize(ver.size)}
+                      </span>
+                      <span className="inline-flex items-center gap-1">
+                        <Download size={12} /> {ver.downloadCount} 次
+                      </span>
+                    </div>
                   </div>
                 </div>
+                <button
+                  className="btn btn-ghost p-2 text-slate-400 hover:text-red-600 hover:bg-red-50"
+                  onClick={() => handleDeleteVersion(ver.version)}
+                  title="删除此版本"
+                >
+                  <Trash2 size={16} />
+                </button>
               </div>
-              <button
-                className="btn btn-ghost p-2 text-slate-400 hover:text-red-600 hover:bg-red-50"
-                onClick={() => handleDeleteVersion(ver.version)}
-                title="删除此版本"
-              >
-                <Trash2 size={16} />
-              </button>
+
+              {ver.integrity && (
+                <div className="mt-3 pt-3 border-t border-slate-100">
+                  <div className="text-xs text-slate-500 mb-2 font-medium">完整性校验信息</div>
+                  <div className="grid grid-cols-1 md:grid-cols-2 gap-2 text-xs">
+                    <div>
+                      <span className="text-slate-400">算法：</span>
+                      <span className="font-mono text-slate-700 uppercase">{ver.integrity.algorithm}</span>
+                    </div>
+                    <div>
+                      <span className="text-slate-400">验证时间：</span>
+                      <span className="text-slate-700">{ver.integrity.verifiedAt ? formatDate(ver.integrity.verifiedAt) : '-'}</span>
+                    </div>
+                    <div className="md:col-span-2">
+                      <span className="text-slate-400">预期哈希：</span>
+                      <span className="font-mono text-slate-700 ml-1 break-all">{ver.integrity.expectedHash}</span>
+                    </div>
+                    <div className="md:col-span-2">
+                      <span className="text-slate-400">计算哈希：</span>
+                      <span
+                        className={`font-mono ml-1 break-all ${
+                          ver.integrity.verified ? 'text-emerald-700' : 'text-red-700'
+                        }`}
+                      >
+                        {ver.integrity.computedHash}
+                      </span>
+                    </div>
+                  </div>
+                </div>
+              )}
+
+              {ver.sha1 && !ver.integrity && (
+                <div className="mt-3 pt-3 border-t border-slate-100">
+                  <div className="text-xs text-slate-400">
+                    预期 SHA1：<span className="font-mono text-slate-600">{ver.sha1}</span>
+                    <span className="ml-2 text-amber-600">（未验证）</span>
+                  </div>
+                </div>
+              )}
             </div>
           ))}
         </div>

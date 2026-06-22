@@ -2,6 +2,7 @@ import { Router, Request, Response, NextFunction } from 'express';
 import { config } from '../../config';
 import { getMetadataIndex } from '../metadata';
 import { getCacheStorage } from '../cache';
+import { getSignatureVerifier } from '../signature';
 import { parseNpmPackageName, sanitizePath } from '../../utils';
 import { isPrivateScope } from '../private-pkg';
 import { makeRequest } from './utils';
@@ -157,7 +158,9 @@ async function handleNpmMetadata(packageName: string, res: Response): Promise<vo
 async function handleNpmTarball(packageName: string, filename: string, res: Response): Promise<void> {
   const metadata = getMetadataIndex();
   const cache = getCacheStorage();
+  const verifier = getSignatureVerifier();
   const { scope } = parseNpmPackageName(packageName);
+  const sigConfig = verifier.getConfig();
 
   if (scope && isPrivateScope(scope)) {
     handlePrivateNpmTarball(packageName, filename, res);
@@ -174,10 +177,21 @@ async function handleNpmTarball(packageName: string, filename: string, res: Resp
     if (pkg && version) {
       metadata.incrementVersionDownload(pkgId, version);
     }
+
+    if (sigConfig.enabled && sigConfig.verifyOnAccess && version) {
+      const ver = pkg?.versions.find((v) => v.version === version);
+      if (ver?.sha1 && !ver.integrity) {
+        verifier.verifyPackage(packageName, version, cachePath, ver.sha1, 'sha1').catch((err) => {
+          console.error(`Background verification failed for ${packageName}@${version}:`, err);
+        });
+      }
+    }
+
     const fileSize = cache.getFileSize(cachePath);
     res.setHeader('Content-Length', fileSize.toString());
     res.setHeader('Content-Type', 'application/octet-stream');
     res.setHeader('X-Cache', 'HIT');
+    res.setHeader('X-Verification', pkg?.verificationStatus || 'unverified');
     cache.readStream(cachePath).pipe(res);
     return;
   }
@@ -191,10 +205,53 @@ async function handleNpmTarball(packageName: string, filename: string, res: Resp
     return;
   }
 
+  let expectedSha1 = '';
+  if (sigConfig.enabled && version) {
+    const pkg = metadata.getPackage(packageName, 'npm');
+    const ver = pkg?.versions.find((v) => v.version === version);
+    if (ver?.sha1) {
+      expectedSha1 = ver.sha1;
+    } else {
+      try {
+        const metaResponse = await makeRequest(
+          `${config.npm.upstream}/${encodeURIComponent(packageName)}/${encodeURIComponent(version)}`
+        );
+        if (metaResponse.statusCode === 200) {
+          const metaData = JSON.parse(metaResponse.body.toString());
+          expectedSha1 = metaData.dist?.shasum || '';
+        }
+      } catch (_err) {
+        // ignore metadata fetch error, proceed without verification
+      }
+    }
+  }
+
+  if (sigConfig.enabled && sigConfig.verifyOnDownload && version && expectedSha1) {
+    const verification = verifier.verifyPackageSync(
+      packageName,
+      version,
+      response.body,
+      expectedSha1,
+      'sha1'
+    );
+
+    if (sigConfig.enforce && verification.status === 'failed') {
+      res.status(403).json({
+        error: 'Package signature verification failed',
+        message: `The package ${packageName}@${version} failed integrity check. Installation blocked by enforce mode.`,
+        expected: verification.integrity?.expectedHash,
+        computed: verification.integrity?.computedHash,
+      });
+      return;
+    }
+
+    res.setHeader('X-Verification', verification.status);
+  }
+
   if (cachePath && version) {
     cache.writeFile(cachePath, response.body);
     const pkgId = metadata.getOrCreatePackage(packageName, 'npm', 'cache', scope);
-    metadata.addVersion(pkgId, version, response.body.length, cachePath);
+    metadata.addVersion(pkgId, version, response.body.length, cachePath, expectedSha1 || undefined);
     metadata.incrementVersionDownload(pkgId, version);
   }
 

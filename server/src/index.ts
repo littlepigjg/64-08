@@ -6,6 +6,7 @@ import { npmRouter, pypiRouter } from './modules/proxy';
 import { privatePkgRouter } from './modules/private-pkg';
 import { getMetadataIndex } from './modules/metadata';
 import { getCacheStorage } from './modules/cache';
+import { getSignatureVerifier } from './modules/signature';
 import { ensureDir } from './utils';
 
 const app = express();
@@ -62,6 +63,9 @@ ensureDir(config.dataDir);
 
 const metadata = getMetadataIndex();
 const cache = getCacheStorage();
+const signatureVerifier = getSignatureVerifier();
+
+signatureVerifier.updateConfig(config.signature);
 
 setInterval(() => {
   try {

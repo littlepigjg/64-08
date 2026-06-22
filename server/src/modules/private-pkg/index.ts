@@ -2,8 +2,9 @@ import { Router, Request, Response } from 'express';
 import { config } from '../../config';
 import { getMetadataIndex } from '../metadata';
 import { getCacheStorage } from '../cache';
+import { getSignatureVerifier } from '../signature';
 import { parseNpmPackageName } from '../../utils';
-import type { RegistryType, PackageSource, PackageVersion } from '../../types';
+import type { RegistryType, PackageSource, PackageVersion, VerificationConfig } from '../../types';
 import semver from 'semver';
 
 const router = Router();
@@ -168,6 +169,105 @@ router.post('/cache/snapshot', (_req: Request, res: Response) => {
   const metadata = getMetadataIndex();
   metadata.recordStorageSnapshot();
   res.json({ success: true, timestamp: Date.now() });
+});
+
+router.get('/signature/config', (_req: Request, res: Response) => {
+  const verifier = getSignatureVerifier();
+  res.json(verifier.getConfig());
+});
+
+router.put('/signature/config', (req: Request, res: Response) => {
+  const verifier = getSignatureVerifier();
+  const body = req.body || {};
+
+  const config: Partial<VerificationConfig> = {};
+  if (typeof body.enabled === 'boolean') config.enabled = body.enabled;
+  if (typeof body.enforce === 'boolean') config.enforce = body.enforce;
+  if (Array.isArray(body.algorithms)) {
+    const validAlgos = ['sha1', 'sha256', 'sha512'] as const;
+    config.algorithms = body.algorithms.filter((a: string) =>
+      validAlgos.includes(a as any)
+    ) as any;
+  }
+  if (typeof body.verifyOnDownload === 'boolean') config.verifyOnDownload = body.verifyOnDownload;
+  if (typeof body.verifyOnAccess === 'boolean') config.verifyOnAccess = body.verifyOnAccess;
+  if (typeof body.allowUnverified === 'boolean') config.allowUnverified = body.allowUnverified;
+
+  verifier.updateConfig(config);
+  res.json({ success: true, config: verifier.getConfig() });
+});
+
+router.get('/signature/:registry/:name', (req: Request, res: Response) => {
+  const verifier = getSignatureVerifier();
+  const registry = req.params.registry as RegistryType;
+  const name = decodeURIComponent(req.params.name as string);
+
+  const metadata = getMetadataIndex();
+  const pkg = metadata.getPackage(name, registry);
+
+  if (!pkg) {
+    res.status(404).json({ error: 'Package not found' });
+    return;
+  }
+
+  const status = verifier.getPackageVerificationStatus(name, registry);
+  const versionResults = pkg.versions.map((ver) => ({
+    version: ver.version,
+    status: ver.integrity
+      ? ver.integrity.verified
+        ? 'verified'
+        : 'failed'
+      : 'unverified',
+    integrity: ver.integrity,
+  }));
+
+  res.json({
+    packageName: name,
+    registry,
+    status,
+    versions: versionResults,
+  });
+});
+
+router.post('/signature/verify/:registry/:name', async (req: Request, res: Response) => {
+  const verifier = getSignatureVerifier();
+  const registry = req.params.registry as RegistryType;
+  const name = decodeURIComponent(req.params.name as string);
+  const version = typeof req.query.version === 'string' ? req.query.version : undefined;
+
+  const metadata = getMetadataIndex();
+  const pkg = metadata.getPackage(name, registry);
+
+  if (!pkg) {
+    res.status(404).json({ error: 'Package not found' });
+    return;
+  }
+
+  const results = [];
+  const versionsToVerify = version
+    ? pkg.versions.filter((v) => v.version === version)
+    : pkg.versions;
+
+  for (const ver of versionsToVerify) {
+    if (ver.sha1 && ver.filePath) {
+      const result = await verifier.verifyPackage(
+        name,
+        ver.version,
+        ver.filePath,
+        ver.sha1,
+        'sha1'
+      );
+      results.push(result);
+    }
+  }
+
+  res.json({ success: true, results });
+});
+
+router.post('/signature/verify-all', async (_req: Request, res: Response) => {
+  const verifier = getSignatureVerifier();
+  const result = await verifier.verifyAllCachedPackages();
+  res.json({ success: true, ...result });
 });
 
 export { router as privatePkgRouter };

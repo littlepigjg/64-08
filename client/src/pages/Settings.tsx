@@ -11,23 +11,38 @@ import {
   Database,
 } from 'lucide-react';
 import { api } from '../api';
-import type { CachePolicy, HealthInfo } from '../types';
+import type { CachePolicy, HealthInfo, VerificationConfig } from '../types';
 import { formatSize } from '../utils';
 
 export default function Settings() {
   const [policy, setPolicy] = useState<CachePolicy | null>(null);
+  const [sigConfig, setSigConfig] = useState<VerificationConfig | null>(null);
   const [health, setHealth] = useState<HealthInfo | null>(null);
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
+  const [savingSig, setSavingSig] = useState(false);
   const [cleaning, setCleaning] = useState(false);
+  const [verifyingAll, setVerifyingAll] = useState(false);
   const [cleanResult, setCleanResult] = useState<{ deletedFiles: number; freedBytes: number } | null>(null);
+  const [verifyResult, setVerifyResult] = useState<{
+    total: number;
+    verified: number;
+    failed: number;
+    errors: string[];
+  } | null>(null);
   const [saveMsg, setSaveMsg] = useState<string | null>(null);
+  const [saveSigMsg, setSaveSigMsg] = useState<string | null>(null);
 
   const loadData = async () => {
     setLoading(true);
     try {
-      const [p, h] = await Promise.all([api.getCachePolicy(), api.health()]);
+      const [p, sc, h] = await Promise.all([
+        api.getCachePolicy(),
+        api.getSignatureConfig(),
+        api.health(),
+      ]);
       setPolicy(p);
+      setSigConfig(sc);
       setHealth(h);
     } finally {
       setLoading(false);
@@ -63,6 +78,36 @@ export default function Settings() {
     }
   };
 
+  const handleSaveSigConfig = async () => {
+    if (!sigConfig) return;
+    setSavingSig(true);
+    setSaveSigMsg(null);
+    try {
+      await api.updateSignatureConfig(sigConfig);
+      setSaveSigMsg('success');
+      setTimeout(() => setSaveSigMsg(null), 3000);
+    } finally {
+      setSavingSig(false);
+    }
+  };
+
+  const handleVerifyAll = async () => {
+    if (!confirm('对所有已缓存的包执行签名验证？这可能需要一些时间。')) return;
+    setVerifyingAll(true);
+    setVerifyResult(null);
+    try {
+      const r = await api.verifyAllPackages();
+      setVerifyResult({
+        total: r.total,
+        verified: r.verified,
+        failed: r.failed,
+        errors: r.errors,
+      });
+    } finally {
+      setVerifyingAll(false);
+    }
+  };
+
   if (loading) {
     return (
       <div className="flex items-center justify-center h-full">
@@ -74,8 +119,8 @@ export default function Settings() {
   return (
     <div className="p-8 max-w-4xl mx-auto space-y-6">
       <div>
-        <h1 className="text-2xl font-bold text-slate-800">缓存策略设置</h1>
-        <p className="text-sm text-slate-500 mt-1">配置本地缓存的存储上限、过期策略和清理规则</p>
+        <h1 className="text-2xl font-bold text-slate-800">系统设置</h1>
+        <p className="text-sm text-slate-500 mt-1">配置缓存策略、签名验证和安全选项</p>
       </div>
 
       <div className="card p-6">
@@ -151,6 +196,221 @@ export default function Settings() {
                 </span>
               )}
             </div>
+          </div>
+        )}
+      </div>
+
+      <div className="card p-6">
+        <h2 className="text-lg font-semibold text-slate-800 mb-5 flex items-center gap-2">
+          <ShieldAlert size={20} /> 签名验证
+        </h2>
+
+        {sigConfig && (
+          <div className="space-y-6">
+            <div>
+              <label className="inline-flex items-center gap-3 cursor-pointer">
+                <input
+                  type="checkbox"
+                  className="w-5 h-5 rounded border-slate-300 text-indigo-600"
+                  checked={sigConfig.enabled}
+                  onChange={(e) =>
+                    setSigConfig({ ...sigConfig, enabled: e.target.checked })}
+                />
+                <span className="text-sm font-medium text-slate-700">
+                  启用签名验证
+                </span>
+              </label>
+              <p className="text-xs text-slate-500 mt-1.5">
+                下载包时自动验证包的完整性，防止供应链攻击
+              </p>
+            </div>
+
+            <div>
+              <label className="inline-flex items-center gap-3 cursor-pointer">
+                <input
+                  type="checkbox"
+                  className="w-5 h-5 rounded border-slate-300 text-indigo-600"
+                  checked={sigConfig.enforce}
+                  onChange={(e) =>
+                    setSigConfig({ ...sigConfig, enforce: e.target.checked })}
+                  disabled={!sigConfig.enabled}
+                />
+                <span className={`text-sm font-medium ${sigConfig.enabled ? 'text-slate-700' : 'text-slate-400'}`}>
+                  强制验证模式
+                </span>
+              </label>
+              <p className="text-xs text-slate-500 mt-1.5">
+                拒绝任何签名验证失败的包安装，开启后将严格校验所有下载
+              </p>
+            </div>
+
+            <div>
+              <label className="inline-flex items-center gap-3 cursor-pointer">
+                <input
+                  type="checkbox"
+                  className="w-5 h-5 rounded border-slate-300 text-indigo-600"
+                  checked={sigConfig.verifyOnDownload}
+                  onChange={(e) =>
+                    setSigConfig({ ...sigConfig, verifyOnDownload: e.target.checked })}
+                  disabled={!sigConfig.enabled}
+                />
+                <span className={`text-sm font-medium ${sigConfig.enabled ? 'text-slate-700' : 'text-slate-400'}`}>
+                  下载时验证
+                </span>
+              </label>
+              <p className="text-xs text-slate-500 mt-1.5">
+                从上游下载包时立即进行哈希验证（推荐）
+              </p>
+            </div>
+
+            <div>
+              <label className="inline-flex items-center gap-3 cursor-pointer">
+                <input
+                  type="checkbox"
+                  className="w-5 h-5 rounded border-slate-300 text-indigo-600"
+                  checked={sigConfig.verifyOnAccess}
+                  onChange={(e) =>
+                    setSigConfig({ ...sigConfig, verifyOnAccess: e.target.checked })}
+                  disabled={!sigConfig.enabled}
+                />
+                <span className={`text-sm font-medium ${sigConfig.enabled ? 'text-slate-700' : 'text-slate-400'}`}>
+                  访问时验证
+                </span>
+              </label>
+              <p className="text-xs text-slate-500 mt-1.5">
+                从缓存读取包时在后台异步验证（可能影响性能）
+              </p>
+            </div>
+
+            <div>
+              <label className="inline-flex items-center gap-3 cursor-pointer">
+                <input
+                  type="checkbox"
+                  className="w-5 h-5 rounded border-slate-300 text-indigo-600"
+                  checked={sigConfig.allowUnverified}
+                  onChange={(e) =>
+                    setSigConfig({ ...sigConfig, allowUnverified: e.target.checked })}
+                  disabled={!sigConfig.enabled}
+                />
+                <span className={`text-sm font-medium ${sigConfig.enabled ? 'text-slate-700' : 'text-slate-400'}`}>
+                  允许未验证的包
+                </span>
+              </label>
+              <p className="text-xs text-slate-500 mt-1.5">
+                允许无法获取签名信息的包继续安装
+              </p>
+            </div>
+
+            <div>
+              <label className="flex items-center gap-2 text-sm font-medium text-slate-700 mb-2">
+                <Database size={16} className="text-slate-400" /> 哈希算法
+              </label>
+              <div className="flex flex-wrap gap-2">
+                {(['sha1', 'sha256', 'sha512'] as const).map((algo) => (
+                  <label
+                    key={algo}
+                    className={`inline-flex items-center gap-2 px-3 py-2 rounded-lg border cursor-pointer transition-colors ${
+                      sigConfig.algorithms.includes(algo)
+                        ? 'border-indigo-500 bg-indigo-50 text-indigo-700'
+                        : 'border-slate-200 text-slate-500'
+                    } ${!sigConfig.enabled ? 'opacity-50 cursor-not-allowed' : ''}`}
+                  >
+                    <input
+                      type="checkbox"
+                      className="w-4 h-4 rounded border-slate-300 text-indigo-600"
+                      checked={sigConfig.algorithms.includes(algo)}
+                      onChange={(e) => {
+                        if (!sigConfig.enabled) return;
+                        if (e.target.checked) {
+                          setSigConfig({
+                            ...sigConfig,
+                            algorithms: [...sigConfig.algorithms, algo],
+                          });
+                        } else {
+                          setSigConfig({
+                            ...sigConfig,
+                            algorithms: sigConfig.algorithms.filter((a) => a !== algo),
+                          });
+                        }
+                      }}
+                      disabled={!sigConfig.enabled}
+                    />
+                    <span className="text-sm font-mono uppercase">{algo}</span>
+                  </label>
+                ))}
+              </div>
+              <p className="text-xs text-slate-500 mt-1.5">
+                选择用于验证的哈希算法，NPM 官方使用 SHA1
+              </p>
+            </div>
+
+            <div className="flex items-center gap-3 pt-2">
+              <button
+                className="btn btn-primary"
+                onClick={handleSaveSigConfig}
+                disabled={savingSig || !sigConfig.enabled}
+              >
+                {savingSig && <Loader2 size={16} className="animate-spin" />}
+                {savingSig ? '保存中...' : '保存配置'}
+              </button>
+              <button
+                className="btn btn-secondary"
+                onClick={handleVerifyAll}
+                disabled={verifyingAll || !sigConfig.enabled}
+              >
+                {verifyingAll && <Loader2 size={16} className="animate-spin" />}
+                {verifyingAll ? '验证中...' : '验证所有包'}
+              </button>
+              {saveSigMsg === 'success' && (
+                <span className="text-sm text-emerald-600 inline-flex items-center gap-1">
+                  <CheckCircle2 size={16} /> 已保存
+                </span>
+              )}
+            </div>
+
+            {verifyResult && (
+              <div className={`mt-5 p-4 rounded-lg border ${
+                verifyResult.failed > 0
+                  ? 'bg-red-50 border-red-200'
+                  : 'bg-emerald-50 border-emerald-200'
+              }`}>
+                <div className={`flex items-center gap-2 ${
+                  verifyResult.failed > 0 ? 'text-red-800' : 'text-emerald-800'
+                }`}>
+                  <CheckCircle2 size={20} />
+                  <span className="font-medium">批量验证完成</span>
+                </div>
+                <div className="mt-2 grid grid-cols-3 gap-4 text-sm">
+                  <div>
+                    <span className={`${
+                      verifyResult.failed > 0 ? 'text-red-700' : 'text-emerald-700'
+                    }`}>总计：</span>
+                    <span className="font-semibold">{verifyResult.total} 个</span>
+                  </div>
+                  <div>
+                    <span className="text-emerald-700">通过：</span>
+                    <span className="font-semibold">{verifyResult.verified} 个</span>
+                  </div>
+                  <div>
+                    <span className="text-red-700">失败：</span>
+                    <span className="font-semibold">{verifyResult.failed} 个</span>
+                  </div>
+                </div>
+                {verifyResult.errors.length > 0 && (
+                  <div className="mt-3 text-xs text-red-600">
+                    <p className="font-medium mb-1">错误详情：</p>
+                    <ul className="list-disc ml-4 space-y-0.5">
+                      {verifyResult.errors.slice(0, 5).map((err, i) => (
+                        <li key={i}>{err}</li>
+                      ))}
+                      {verifyResult.errors.length > 5 && (
+                        <li>... 还有 {verifyResult.errors.length - 5} 个错误</li>
+                      )}
+                    </ul>
+                  </div>
+                )}
+              </div>
+            )}
           </div>
         )}
       </div>
